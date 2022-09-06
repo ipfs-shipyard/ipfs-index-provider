@@ -7,11 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/filecoin-project/index-provider/engine"
 	"github.com/ipfs-shipyard/ipfs-index-provider/listener"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-delegated-routing/client"
 	"github.com/ipfs/go-delegated-routing/gen/proto"
 	"github.com/ipfs/go-delegated-routing/server"
+	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/peer"
 	multiaddr "github.com/multiformats/go-multiaddr"
@@ -27,7 +29,19 @@ func TestProvideRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ip, err := listener.NewIndexProvider(nil)
+
+	h, err := libp2p.New()
+	if err != nil {
+		panic(err)
+	}
+
+	e, err := engine.New(engine.WithHost(h), engine.WithPublisherKind(engine.DataTransferPublisher))
+	if err != nil {
+		panic(err)
+	}
+
+	ttl := int64(24 * time.Hour)
+	ip, err := listener.NewIndexProvider(e, ttl, 10, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +70,7 @@ func TestProvideRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if rc != time.Hour {
+	if rc != 24*time.Hour {
 		t.Fatal("should have gotten back the the fixed server ttl")
 	}
 }

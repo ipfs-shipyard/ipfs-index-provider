@@ -6,14 +6,13 @@ import (
 	"net/http"
 
 	"github.com/filecoin-project/index-provider/engine"
-	"github.com/filecoin-project/index-provider/supplier"
 	"github.com/ipfs-shipyard/ipfs-index-provider/listener"
 	drserver "github.com/ipfs/go-delegated-routing/server"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p-core/host"
 )
 
-var log = logging.Logger("adminserver")
+var log = logging.Logger("server")
 
 type Server struct {
 	server *http.Server
@@ -22,7 +21,7 @@ type Server struct {
 	e      *engine.Engine
 }
 
-func New(h host.Host, e *engine.Engine, cs *supplier.CarSupplier, o ...Option) (*Server, error) {
+func New(h host.Host, e *engine.Engine, o ...Option) (*Server, error) {
 	opts, err := newOptions(o...)
 	if err != nil {
 		return nil, err
@@ -33,7 +32,7 @@ func New(h host.Host, e *engine.Engine, cs *supplier.CarSupplier, o ...Option) (
 		return nil, err
 	}
 
-	ip, err := listener.NewIndexProvider(nil)
+	ip, err := listener.NewIndexProvider(e, opts.ttl, opts.cidsPerChunk, opts.contextIdLength)
 	if err != nil {
 		return nil, err
 	}

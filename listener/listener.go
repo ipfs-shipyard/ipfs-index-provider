@@ -22,23 +22,13 @@ type DelegatedRoutingIndexProvider struct {
 	e *engine.Engine
 	// ds      datastore.Datastore
 	ttl     int64
-	chunker cidsChunker
+	chunker *cidsChunker
 	nodes   map[cid.Cid]*node
 	first   *node
 	last    *node
 }
 
-func NewIndexProvider(e *engine.Engine) (*DelegatedRoutingIndexProvider, error) {
-	// h, err := libp2p.New()
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// e, err := engine.New(engine.WithHost(h), engine.WithPublisherKind(engine.DataTransferPublisher))
-	// if err != nil {
-	// 	panic(err)
-	// }
-
+func NewIndexProvider(e *engine.Engine, ttl int64, cidsPerChunk int, contextIdLength int) (*DelegatedRoutingIndexProvider, error) {
 	// err = checkWritable(dir)
 	// if err != nil {
 	// 	return nil, err
@@ -48,7 +38,20 @@ func NewIndexProvider(e *engine.Engine) (*DelegatedRoutingIndexProvider, error) 
 	// 	return nil, err
 	// }
 
-	indexProvider := &DelegatedRoutingIndexProvider{e: e, ttl: 24 * 60 * 60 * 1000, nodes: make(map[cid.Cid]*node)}
+	contextID, err := randomBytes(contextIdLength)
+	if err != nil {
+		return nil, err
+	}
+
+	indexProvider := &DelegatedRoutingIndexProvider{e: e,
+		ttl:   ttl,
+		nodes: make(map[cid.Cid]*node),
+		chunker: &cidsChunker{
+			cidsPerChunk:    cidsPerChunk,
+			contextIdLength: contextIdLength,
+			current:         &cidsChunk{contextID: contextID},
+		},
+	}
 
 	e.RegisterMultihashLister(func(ctx context.Context, contextID []byte) (provider.MultihashIterator, error) {
 		chunk := indexProvider.chunker.chunkByCid[string(contextID)]
@@ -116,7 +119,7 @@ func (d *DelegatedRoutingIndexProvider) Provide(ctx context.Context, pr *client.
 			d.addFirst(n)
 		}
 		d.purgeExpired(ctx)
-		ch <- client.ProvideAsyncResult{AdvisoryTTL: pr.AdvisoryTTL}
+		ch <- client.ProvideAsyncResult{AdvisoryTTL: time.Duration(d.ttl)}
 		close(ch)
 	}()
 	return ch, nil

@@ -7,17 +7,23 @@ type (
 	Option func(*options) error
 
 	options struct {
-		listenAddr   string
-		readTimeout  time.Duration
-		writeTimeout time.Duration
+		listenAddr      string
+		readTimeout     time.Duration
+		writeTimeout    time.Duration
+		cidsPerChunk    int
+		ttl             int64
+		contextIdLength int
 	}
 )
 
 func newOptions(o ...Option) (*options, error) {
 	opts := &options{
-		listenAddr:   "0.0.0.0:3102",
-		readTimeout:  30 * time.Second,
-		writeTimeout: 30 * time.Second,
+		listenAddr:      "0.0.0.0:3102",
+		readTimeout:     30 * time.Second,
+		writeTimeout:    30 * time.Second,
+		ttl:             24 * 60 * 60 * 1000,
+		cidsPerChunk:    10,
+		contextIdLength: 50,
 	}
 
 	for _, apply := range o {
@@ -51,6 +57,27 @@ func WithReadTimeout(t time.Duration) Option {
 func WithWriteTimeout(t time.Duration) Option {
 	return func(o *options) error {
 		o.writeTimeout = t
+		return nil
+	}
+}
+
+func WithTtl(ttl int64) Option {
+	return func(o *options) error {
+		o.ttl = ttl
+		return nil
+	}
+}
+
+func WithCidsPerChunk(c int) Option {
+	return func(o *options) error {
+		o.cidsPerChunk = c
+		return nil
+	}
+}
+
+func WithContextIdLength(c int) Option {
+	return func(o *options) error {
+		o.contextIdLength = c
 		return nil
 	}
 }
