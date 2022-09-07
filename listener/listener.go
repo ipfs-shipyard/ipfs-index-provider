@@ -2,15 +2,15 @@ package listener
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"time"
 
 	provider "github.com/filecoin-project/index-provider"
-	"github.com/filecoin-project/index-provider/engine"
 	"github.com/filecoin-project/index-provider/metadata"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-delegated-routing/client"
+	logging "github.com/ipfs/go-log/v2"
 
 	// leveldb "github.com/ipfs/go-ds-leveldb"
 
@@ -18,17 +18,20 @@ import (
 	"github.com/multiformats/go-multihash"
 )
 
+var log = logging.Logger("listener")
+var bitswapMetadata = metadata.New(metadata.Bitswap{})
+
 type DelegatedRoutingIndexProvider struct {
-	e *engine.Engine
+	e EngineProxy
 	// ds      datastore.Datastore
-	ttl     int64
-	chunker *cidsChunker
-	nodes   map[cid.Cid]*node
-	first   *node
-	last    *node
+	cidExpiryPeriod time.Duration
+	chunker         *cidsChunker
+	cidNodes        map[cid.Cid]*cidNode
+	first           *cidNode
+	last            *cidNode
 }
 
-func NewIndexProvider(e *engine.Engine, ttl int64, cidsPerChunk int, contextIdLength int) (*DelegatedRoutingIndexProvider, error) {
+func NewIndexProvider(e EngineProxy, cidExpiryPeriod time.Duration, cidsPerChunk int, cidCleanUpInterval time.Duration) (*DelegatedRoutingIndexProvider, error) {
 	// err = checkWritable(dir)
 	// if err != nil {
 	// 	return nil, err
@@ -38,25 +41,22 @@ func NewIndexProvider(e *engine.Engine, ttl int64, cidsPerChunk int, contextIdLe
 	// 	return nil, err
 	// }
 
-	contextID, err := randomBytes(contextIdLength)
-	if err != nil {
-		return nil, err
-	}
-
 	indexProvider := &DelegatedRoutingIndexProvider{e: e,
-		ttl:   ttl,
-		nodes: make(map[cid.Cid]*node),
+		cidExpiryPeriod: cidExpiryPeriod,
+		cidNodes:        make(map[cid.Cid]*cidNode),
 		chunker: &cidsChunker{
-			cidsPerChunk:    cidsPerChunk,
-			contextIdLength: contextIdLength,
-			current:         &cidsChunk{contextID: contextID},
+			cidsPerChunk:     cidsPerChunk,
+			current:          &cidsChunk{},
+			chunkByContextId: make(map[string]*cidsChunk),
+			chunkByCid:       make(map[cid.Cid]*cidsChunk),
 		},
 	}
 
 	e.RegisterMultihashLister(func(ctx context.Context, contextID []byte) (provider.MultihashIterator, error) {
-		chunk := indexProvider.chunker.chunkByCid[string(contextID)]
+		chunk := indexProvider.chunker.chunkByContextId[string(contextID)]
 		if chunk == nil {
-			return nil, errors.New("not found")
+			log.Error("MultihasLister couldn't find chunk for contextID %s", string(contextID))
+			return nil, errors.New("MultihasLister couldn't find chunk for contextID")
 		}
 		var mhs []multihash.Multihash
 		for _, c := range chunk.cids {
@@ -102,10 +102,10 @@ func (d *DelegatedRoutingIndexProvider) Provide(ctx context.Context, pr *client.
 	ch := make(chan client.ProvideAsyncResult)
 
 	go func() {
-		n := d.nodes[pr.Key]
+		n := d.cidNodes[pr.Key]
 		if n == nil {
-			n = &node{timestamp: pr.Timestamp, c: pr.Key, provider: pr.Peer, next: d.first}
-			d.nodes[pr.Key] = n
+			n = &cidNode{timestamp: pr.Timestamp, c: pr.Key, provider: pr.Peer, next: d.first}
+			d.cidNodes[pr.Key] = n
 			d.addFirst(n)
 			d.chunkCid(ctx, pr.Key)
 		} else {
@@ -118,14 +118,15 @@ func (d *DelegatedRoutingIndexProvider) Provide(ctx context.Context, pr *client.
 			}
 			d.addFirst(n)
 		}
-		d.purgeExpired(ctx)
-		ch <- client.ProvideAsyncResult{AdvisoryTTL: time.Duration(d.ttl)}
+		d.removeExpiredCids(ctx)
+
+		ch <- client.ProvideAsyncResult{AdvisoryTTL: time.Duration(d.cidExpiryPeriod)}
 		close(ch)
 	}()
 	return ch, nil
 }
 
-func (d *DelegatedRoutingIndexProvider) addFirst(n *node) {
+func (d *DelegatedRoutingIndexProvider) addFirst(n *cidNode) {
 	if d.first != nil {
 		n.next = d.first
 		d.first.prev = n
@@ -136,7 +137,7 @@ func (d *DelegatedRoutingIndexProvider) addFirst(n *node) {
 	}
 }
 
-func (d *DelegatedRoutingIndexProvider) removeLast() *node {
+func (d *DelegatedRoutingIndexProvider) removeLast() *cidNode {
 	if d.last == nil {
 		return nil
 	}
@@ -150,38 +151,59 @@ func (d *DelegatedRoutingIndexProvider) removeLast() *node {
 	return removed
 }
 
-func (d *DelegatedRoutingIndexProvider) purgeExpired(ctx context.Context) {
-	n := d.last
+func (d *DelegatedRoutingIndexProvider) removeExpiredCids(ctx context.Context) {
+	node := d.last
 	t := time.Now().UnixMilli()
+	chunksToRepublish := make(map[string]*cidsChunk)
+	expiredCids := make(map[cid.Cid]bool)
 	for {
-		if n == nil || t-n.timestamp <= d.ttl {
+		if node == nil || time.Duration(t-node.timestamp) <= d.cidExpiryPeriod {
 			break
 		}
-		r := d.removeLast()
-		n = d.last
+		removedNode := d.removeLast()
+		node = d.last
 
-		if r != nil {
-			// publish delete
+		if removedNode != nil {
+			chunk := d.chunker.chunkByCid[removedNode.c]
+			expiredCids[removedNode.c] = true
+			chunksToRepublish[string(chunk.contextID)] = chunk
 		}
+	}
+
+	for _, chunk := range chunksToRepublish {
+		newChunk := &cidsChunk{}
+		for _, c := range chunk.cids {
+			if expiredCids[c] {
+				continue
+			}
+			newChunk.cids = append(newChunk.cids, c)
+			d.chunker.chunkByCid[c] = newChunk
+		}
+		chunk.removed = true
+		newChunk.contextID = generateContextID(newChunk.cids)
+		d.chunker.chunkByContextId[string(newChunk.contextID)] = newChunk
+		d.e.NotifyRemove(ctx, chunk.contextID)
+		d.e.NotifyPut(ctx, newChunk.contextID, bitswapMetadata)
 	}
 }
 
-type node struct {
+type cidNode struct {
 	timestamp int64
 	c         cid.Cid
 	provider  peer.AddrInfo
-	prev      *node
-	next      *node
+	prev      *cidNode
+	next      *cidNode
 }
 
 type cidsChunker struct {
-	cidsPerChunk    int
-	contextIdLength int
-	current         *cidsChunk
-	chunkByCid      map[string]*cidsChunk
+	cidsPerChunk     int
+	current          *cidsChunk
+	chunkByContextId map[string]*cidsChunk
+	chunkByCid       map[cid.Cid]*cidsChunk
 }
 
 type cidsChunk struct {
+	removed   bool
 	contextID []byte
 	cids      []cid.Cid
 }
@@ -190,28 +212,25 @@ func (d *DelegatedRoutingIndexProvider) chunkCid(ctx context.Context, c cid.Cid)
 	d.chunker.current.cids = append(d.chunker.current.cids, c)
 
 	if len(d.chunker.current.cids) == d.chunker.cidsPerChunk {
-		d.chunker.chunkByCid[string(d.chunker.current.contextID)] = d.chunker.current
-
-		contextID, err := randomBytes(d.chunker.contextIdLength)
-		if err != nil {
-			return err
+		d.chunker.current.contextID = generateContextID(d.chunker.current.cids)
+		d.chunker.chunkByContextId[string(d.chunker.current.contextID)] = d.chunker.current
+		for _, c := range d.chunker.current.cids {
+			d.chunker.chunkByCid[c] = d.chunker.current
 		}
-
 		toPublish := d.chunker.current
-		d.chunker.current = &cidsChunk{contextID: contextID}
+		d.chunker.current = &cidsChunk{}
 
 		//TODO: record proper metadata
-		d.e.NotifyPut(ctx, toPublish.contextID, metadata.New(metadata.Bitswap{}))
+		d.e.NotifyPut(ctx, toPublish.contextID, bitswapMetadata)
 	}
 
 	return nil
 }
 
-func randomBytes(n int) ([]byte, error) {
-	b := make([]byte, n)
-	_, err := rand.Read(b)
-	if err != nil {
-		return nil, err
+func generateContextID(cids []cid.Cid) []byte {
+	hasher := sha256.New()
+	for _, c := range cids {
+		hasher.Write(c.Bytes())
 	}
-	return b, nil
+	return hasher.Sum(nil)
 }

@@ -32,7 +32,7 @@ func New(h host.Host, e *engine.Engine, o ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	ip, err := listener.NewIndexProvider(e, opts.ttl, opts.cidsPerChunk, opts.contextIdLength)
+	ip, err := listener.NewIndexProvider(e, opts.ttl, opts.cidsPerChunk, 0)
 	if err != nil {
 		return nil, err
 	}
