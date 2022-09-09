@@ -6,7 +6,8 @@ import (
 	"net/http"
 
 	"github.com/filecoin-project/index-provider/engine"
-	"github.com/ipfs-shipyard/ipfs-index-provider/listener"
+	ipfsip "github.com/ipfs-shipyard/ipfs-index-provider/indexprovider"
+	"github.com/ipfs/go-datastore"
 	drserver "github.com/ipfs/go-delegated-routing/server"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p-core/host"
@@ -32,7 +33,7 @@ func New(h host.Host, e *engine.Engine, o ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	ip, err := listener.NewIndexProvider(e, opts.ttl, opts.cidsPerChunk, 0)
+	ip, err := ipfsip.NewIndexProvider(context.Background(), e, opts.ttl, opts.cidsPerChunk, datastore.NewMapDatastore())
 	if err != nil {
 		return nil, err
 	}

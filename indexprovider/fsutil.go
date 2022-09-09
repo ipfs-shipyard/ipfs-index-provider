@@ -1,4 +1,4 @@
-package listener
+package indexprovider
 
 import (
 	"errors"
