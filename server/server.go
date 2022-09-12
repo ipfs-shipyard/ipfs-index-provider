@@ -5,12 +5,10 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/filecoin-project/index-provider/engine"
-	ipfsip "github.com/ipfs-shipyard/ipfs-index-provider/indexprovider"
+	"github.com/ipfs-shipyard/ipfs-index-provider/indexprovider"
 	"github.com/ipfs/go-datastore"
 	drserver "github.com/ipfs/go-delegated-routing/server"
 	logging "github.com/ipfs/go-log/v2"
-	"github.com/libp2p/go-libp2p-core/host"
 )
 
 var log = logging.Logger("server")
@@ -18,11 +16,10 @@ var log = logging.Logger("server")
 type Server struct {
 	server *http.Server
 	l      net.Listener
-	h      host.Host
-	e      *engine.Engine
+	e      indexprovider.EngineProxy
 }
 
-func New(h host.Host, e *engine.Engine, o ...Option) (*Server, error) {
+func New(e indexprovider.EngineProxy, o ...Option) (*Server, error) {
 	opts, err := newOptions(o...)
 	if err != nil {
 		return nil, err
@@ -33,7 +30,7 @@ func New(h host.Host, e *engine.Engine, o ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	ip, err := ipfsip.NewIndexProvider(context.Background(), e, opts.ttl, opts.cidsPerChunk, datastore.NewMapDatastore())
+	ip, err := indexprovider.NewIndexProvider(context.Background(), e, opts.ttl, opts.cidsPerChunk, datastore.NewMapDatastore())
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +42,7 @@ func New(h host.Host, e *engine.Engine, o ...Option) (*Server, error) {
 		ReadTimeout:  opts.readTimeout,
 		WriteTimeout: opts.writeTimeout,
 	}
-	s := &Server{server, l, h, e}
+	s := &Server{server, l, e}
 	if err != nil {
 		return nil, err
 	}
