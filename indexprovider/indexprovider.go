@@ -24,7 +24,7 @@ import (
 	"github.com/multiformats/go-multihash"
 )
 
-var log = logging.Logger("listener")
+var log = logging.Logger("ipfs-index-provider")
 var bitswapMetadata = metadata.New(metadata.Bitswap{})
 
 const chunkByContextIdIndexPrefix = "i/ccid/"
@@ -115,7 +115,7 @@ func (d *DelegatedRoutingIndexProvider) initialiseFromTheDatastore(ctx context.C
 	}
 
 	sort.SliceStable(sortedNodes, func(i, j int) bool {
-		return sortedNodes[j].timestamp.UnixMilli() < sortedNodes[j].timestamp.UnixMilli()
+		return sortedNodes[i].timestamp.UnixMilli() < sortedNodes[j].timestamp.UnixMilli()
 	})
 
 	for i := range sortedNodes {
@@ -213,9 +213,15 @@ func (d *DelegatedRoutingIndexProvider) Provide(ctx context.Context, pr *client.
 				// moving the node to the beginning of the linked list
 				if n.prev != nil {
 					n.prev.next = n.next
+				} else {
+					// that was the first node
+					d.firstNode = n.next
 				}
 				if n.next != nil {
 					n.next.prev = n.prev
+				} else {
+					// that was the last node
+					d.lastNode = n.prev
 				}
 				d.addFirstNode(n)
 
@@ -241,6 +247,7 @@ func (d *DelegatedRoutingIndexProvider) addFirstNode(n *cidNode) {
 		d.firstNode.prev = n
 	}
 	d.firstNode = n
+	n.prev = nil
 	if d.lastNode == nil {
 		d.lastNode = n
 	}

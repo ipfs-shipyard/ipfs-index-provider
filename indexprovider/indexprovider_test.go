@@ -423,6 +423,8 @@ func TestShouldInitialiseFromDatastore(t *testing.T) {
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String(), testCid4.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String(), testCid4.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid4.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())))
 
 	ttl := time.Second
