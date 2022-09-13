@@ -12,4 +12,6 @@ type EngineProxy interface {
 	RegisterMultihashLister(l provider.MultihashLister)
 	NotifyPut(ctx context.Context, contextID []byte, md metadata.Metadata) (cid.Cid, error)
 	NotifyRemove(ctx context.Context, contextID []byte) (cid.Cid, error)
+	Start(ctx context.Context) error
+	Shutdown() error
 }

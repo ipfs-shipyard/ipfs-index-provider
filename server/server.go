@@ -19,7 +19,7 @@ type Server struct {
 	e      indexprovider.EngineProxy
 }
 
-func New(e indexprovider.EngineProxy, o ...Option) (*Server, error) {
+func New(e indexprovider.EngineProxy, ds datastore.Datastore, o ...Option) (*Server, error) {
 	opts, err := newOptions(o...)
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func New(e indexprovider.EngineProxy, o ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	ip, err := indexprovider.NewIndexProvider(context.Background(), e, opts.ttl, opts.cidsPerChunk, datastore.NewMapDatastore())
+	ip, err := indexprovider.NewIndexProvider(context.Background(), e, opts.ttl, opts.cidsPerChunk, ds)
 	if err != nil {
 		return nil, err
 	}
@@ -49,12 +49,20 @@ func New(e indexprovider.EngineProxy, o ...Option) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) Start() error {
+func (s *Server) Start(ctx context.Context) error {
 	log.Infow("admin http server listening", "addr", s.l.Addr())
+	err := s.e.Start(ctx)
+	if err != nil {
+		return err
+	}
 	return s.server.Serve(s.l)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Info("admin http server shutdown")
+	err := s.e.Shutdown()
+	if err != nil {
+		return err
+	}
 	return s.server.Shutdown(ctx)
 }

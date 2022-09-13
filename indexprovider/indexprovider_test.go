@@ -11,9 +11,9 @@ import (
 
 	"github.com/filecoin-project/index-provider/engine"
 	"github.com/filecoin-project/index-provider/metadata"
-	mock_engine "github.com/filecoin-project/index-provider/mock"
 	"github.com/golang/mock/gomock"
 	ipfsip "github.com/ipfs-shipyard/ipfs-index-provider/indexprovider"
+	mock_engine "github.com/ipfs-shipyard/ipfs-index-provider/mock"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-delegated-routing/client"
@@ -96,7 +96,7 @@ func TestShouldAdvertiseTwoChunksWithOneCidInEach(t *testing.T) {
 	testCid2 := newCid("test2")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -130,7 +130,7 @@ func TestShouldAdvertiseOneChunkWithTwoCidsInIt(t *testing.T) {
 	testCid3 := newCid("test3")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -162,7 +162,7 @@ func TestShouldNotReAdvertiseRepeatedCids(t *testing.T) {
 	testCid := newCid("test")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -194,7 +194,7 @@ func TestExpiredCidsShouldBeReadvertisedIfProvidedAgain(t *testing.T) {
 	testCid2 := newCid("test2")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -232,7 +232,7 @@ func TestShouldRemoveExpiredCidAndReadvertiseChunk(t *testing.T) {
 	testCid3 := newCid("test3")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -270,7 +270,7 @@ func TestShouldRemoveCidsAsTheyExpire(t *testing.T) {
 	testCid3 := newCid("test3")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -310,7 +310,7 @@ func TestRepublishingCidShouldUpdateItsExpiryDate(t *testing.T) {
 	testCid3 := newCid("test3")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -348,7 +348,7 @@ func TestShouldNotReadvertiseChunkIfAllItsCidsExpired(t *testing.T) {
 	testCid2 := newCid("test2")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
@@ -382,7 +382,7 @@ func TestProvidingSameCidMultipleTimesShouldntAffectTheCurrentChunk(t *testing.T
 	testCid1 := newCid("test1")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 
@@ -417,7 +417,7 @@ func TestShouldInitialiseFromDatastore(t *testing.T) {
 	testCid4 := newCid("test4")
 
 	mc := gomock.NewController(t)
-	mockEng := mock_engine.NewMockInterface(mc)
+	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
 	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))

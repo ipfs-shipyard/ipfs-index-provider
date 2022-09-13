@@ -8,124 +8,92 @@ import (
 	"path/filepath"
 	"testing"
 
-	datatransfer "github.com/filecoin-project/go-data-transfer/impl"
-	dtnetwork "github.com/filecoin-project/go-data-transfer/network"
-	gstransport "github.com/filecoin-project/go-data-transfer/transport/graphsync"
 	"github.com/filecoin-project/index-provider/engine"
-	"github.com/filecoin-project/index-provider/engine/policy"
-	"github.com/ipfs-shipyard/ipfs-index-provider/indexprovider/internal/config"
 	"github.com/ipfs-shipyard/ipfs-index-provider/server"
-	leveldb "github.com/ipfs/go-ds-leveldb"
-	gsimpl "github.com/ipfs/go-graphsync/impl"
-	gsnet "github.com/ipfs/go-graphsync/network"
-	logging "github.com/ipfs/go-log/v2"
-	cidlink "github.com/ipld/go-ipld-prime/linking/cid"
+	"github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
 	"github.com/mitchellh/go-homedir"
-	"github.com/multiformats/go-multiaddr"
+	"github.com/stretchr/testify/require"
 )
 
-var log = logging.Logger("server-test")
+func _TestServer(t *testing.T) {
+	s, err := createServer()
+	require.NoError(t, err)
 
-func TestServer(t *testing.T) {
-	createServer()
+	fmt.Printf("Starting server\n")
+	err = s.Start(context.Background())
+	require.NoError(t, err)
+	defer func() {
+		fmt.Printf("Shutting down\n")
+		s.Shutdown(context.Background())
+	}()
 }
 
 func createServer() (*server.Server, error) {
 	// --- config
 
-	cfg, err := config.Load("")
-	if err != nil {
-		if err == config.ErrNotInitialized {
-			return nil, errors.New("reference provider is not initialized\nTo initialize, run using the \"init\" command")
-		}
-		return nil, fmt.Errorf("cannot load config file: %w", err)
-	}
+	// cfg, err := config.Load("")
+	// if err != nil {
+	// 	if err == config.ErrNotInitialized {
+	// 		return nil, errors.New("reference provider is not initialized\nTo initialize, run using the \"init\" command")
+	// 	}
+	// 	return nil, fmt.Errorf("cannot load config file: %w", err)
+	// }
 
 	// --- libp2p
 
-	_, privKey, err := cfg.Identity.Decode()
+	// _, privKey, err := cfg.Identity.Decode()
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// p2pmaddr, err := multiaddr.NewMultiaddr(cfg.ReframeServer.ListenMultiaddr)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("bad p2p address in config %s: %s", cfg.ReframeServer.ListenMultiaddr, err)
+	// }
+
+	// h, err := libp2p.New(
+	// 	// Use the keypair generated during init
+	// 	libp2p.Identity(privKey),
+	// 	// Listen to p2p addr specified in config
+	// 	libp2p.ListenAddrs(p2pmaddr),
+	// )
+
+	// Create a new libp2p host
+	h, err := libp2p.New()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	p2pmaddr, err := multiaddr.NewMultiaddr(cfg.ProviderServer.ListenMultiaddr)
-	if err != nil {
-		return nil, fmt.Errorf("bad p2p address in config %s: %s", cfg.ProviderServer.ListenMultiaddr, err)
-	}
+	fmt.Printf("libp2p host initialized. host_id=%s\n", h.ID())
 
-	h, err := libp2p.New(
-		// Use the keypair generated during init
-		libp2p.Identity(privKey),
-		// Listen to p2p addr specified in config
-		libp2p.ListenAddrs(p2pmaddr),
-	)
+	// Starting provider core
+	eng, err := engine.New(engine.WithHost(h), engine.WithPublisherKind(engine.DataTransferPublisher))
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	log.Infow("libp2p host initialized", "host_id", h.ID(), "multiaddr", p2pmaddr)
 
 	// ---   datastore
 
-	if cfg.Datastore.Type != "levelds" {
-		return nil, fmt.Errorf("only levelds datastore type supported, %q not supported", cfg.Datastore.Type)
-	}
-	dataStorePath, err := config.Path("", cfg.Datastore.Dir)
-	if err != nil {
-		return err
-	}
-	err = checkWritable(dataStorePath)
-	if err != nil {
-		return err
-	}
-	ds, err := leveldb.NewDatastore(dataStorePath, nil)
-	if err != nil {
-		return err
-	}
+	// dataStorePath, err := config.Path("", "datastore")
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// err = checkWritable(dataStorePath)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// ds, err := leveldb.NewDatastore(dataStorePath, nil)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	// --- datatransfer
+	/// --- server
 
-	gsnet := gsnet.NewFromLibp2pHost(h)
-	dtNet := dtnetwork.NewFromLibp2pHost(h)
-	gs := gsimpl.New(context.Background(), gsnet, cidlink.DefaultLinkSystem())
-	tp := gstransport.NewTransport(h.ID(), gs)
-
-	dt, err := datatransfer.NewDataTransfer(ds, dtNet, tp)
+	s, err := server.New(eng, datastore.NewMapDatastore(), server.WithCidsPerChunk(1))
 	if err != nil {
-		return err
-	}
-	err = dt.Start(context.Background())
-	if err != nil {
-		return err
-	}
-
-	// --- sync policy
-
-	syncPolicy, err := policy.New(cfg.Ingest.SyncPolicy.Allow, cfg.Ingest.SyncPolicy.Except)
-	if err != nil {
-		return err
-	}
-
-	// Starting provider core
-	eng, err := engine.New(
-		engine.WithDatastore(ds),
-		engine.WithDataTransfer(dt),
-		// engine.WithDirectAnnounce(cfg.DirectAnnounce.URLs...),
-		engine.WithHost(h),
-		engine.WithEntriesCacheCapacity(cfg.Ingest.LinkCacheSize),
-		engine.WithChainedEntries(cfg.Ingest.LinkedChunkSize),
-		engine.WithTopicName(cfg.Ingest.PubSubTopic),
-		engine.WithPublisherKind(engine.PublisherKind(cfg.Ingest.PublisherKind)),
-		engine.WithSyncPolicy(syncPolicy))
-	if err != nil {
-		return err
-	}
-
-	s, err := server.New(eng, server.WithCidsPerChunk(10))
-	if err != nil {
-		log.Error("Error initialising server", err)
-		return err
+		fmt.Printf("Error initialising server %s\n", err)
+		return nil, err
 	}
 
 	return s, nil

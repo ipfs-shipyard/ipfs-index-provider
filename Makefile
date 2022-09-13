@@ -28,7 +28,7 @@ lint:
 
 .PHONY: mock/mock_engine_proxy.go
 mock: listener/engineproxy.go
-	mockgen --source listener/engineproxy.go --destination mock/mock_engineproxy.go --package mock_engine
+	mockgen --source indexprovider/engineproxy.go --destination mock/mock_engineproxy.go --package mock_engine
 
 .PHONY: test
 test: mock

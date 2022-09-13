@@ -11,9 +11,9 @@ import (
 
 // Config is used to load config files.
 type Config struct {
-	Identity    Identity
-	Datastore   Datastore
-	AdminServer ReframeServer
+	Identity      Identity
+	Datastore     Datastore
+	ReframeServer ReframeServer
 }
 
 const (
@@ -91,8 +91,8 @@ func Load(filePath string) (*Config, error) {
 
 	// Populate with initial values in case they are not present in config.
 	cfg := Config{
-		Datastore:   NewDatastore(),
-		AdminServer: NewReframeServer(),
+		Datastore:     NewDatastore(),
+		ReframeServer: NewReframeServer(),
 	}
 
 	if err = json.NewDecoder(f).Decode(&cfg); err != nil {
@@ -144,6 +144,6 @@ func (c *Config) String() string {
 }
 
 func (c *Config) PopulateDefaults() {
-	c.AdminServer.PopulateDefaults()
+	c.ReframeServer.PopulateDefaults()
 	c.Datastore.PopulateDefaults()
 }

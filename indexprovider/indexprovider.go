@@ -83,6 +83,14 @@ func NewIndexProviderWithNonceGen(ctx context.Context, e EngineProxy, cidExpiryP
 	return indexProvider, nil
 }
 
+func (d *DelegatedRoutingIndexProvider) Start(ctx context.Context) error {
+	return d.e.Start(ctx)
+}
+
+func (d *DelegatedRoutingIndexProvider) Shutdown() error {
+	return d.e.Shutdown()
+}
+
 func (d *DelegatedRoutingIndexProvider) initialiseFromTheDatastore(ctx context.Context) error {
 	// reading up timestamp by cid index from the datastore
 	q := dsq.Query{Prefix: timestampByCidIndexPrefix}
@@ -198,7 +206,7 @@ func (d *DelegatedRoutingIndexProvider) Provide(ctx context.Context, pr *client.
 		var err error
 		if n == nil {
 			n = &cidNode{timestamp: time.UnixMilli(pr.Timestamp * 1000), c: pr.Key, next: d.firstNode}
-			err = d.ds.Put(ctx, timestampByCidKey(pr.Key), int64ToBytes(n.timestamp.UnixMilli()))
+			err = d.ds.Put(ctx, timestampByCidKey(pr.Key), int64ToBytes(n.timestamp.Add(d.cidExpiryPeriod).UnixMilli()))
 			if err == nil {
 				d.nodeByCid[pr.Key] = n
 				d.addFirstNode(n)
@@ -288,12 +296,10 @@ func (d *DelegatedRoutingIndexProvider) removeExpiredCids(ctx context.Context) e
 		removedNode := d.removeLastNode()
 
 		chunk := d.chunkByCid[removedNode.c]
-		if chunk == nil {
-			continue
+		if chunk != nil {
+			chunksToRepublish[string(chunk.ContextID)] = chunk
+			expiredCids[removedNode.c] = true
 		}
-
-		expiredCids[removedNode.c] = true
-		chunksToRepublish[string(chunk.ContextID)] = chunk
 
 		node = d.lastNode
 	}
