@@ -1,4 +1,4 @@
-package server_test
+package main
 
 import (
 	"context"
@@ -6,25 +6,29 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"testing"
 
-	"github.com/filecoin-project/index-provider/engine"
 	"github.com/ipfs-shipyard/ipfs-index-provider/server"
 	"github.com/ipfs/go-datastore"
-	"github.com/libp2p/go-libp2p"
+	logging "github.com/ipfs/go-log/v2"
 	"github.com/mitchellh/go-homedir"
-	"github.com/stretchr/testify/require"
 )
 
-func _TestServer(t *testing.T) {
-	s, err := createServer()
-	require.NoError(t, err)
+var log = logging.Logger("main")
 
-	fmt.Printf("Starting server\n")
+func main() {
+	setLoggingConfig()
+	s, err := createServer()
+	if err != nil {
+		panic(err)
+	}
+
+	log.Info("Starting server")
 	err = s.Start(context.Background())
-	require.NoError(t, err)
+	if err != nil {
+		panic(err)
+	}
 	defer func() {
-		fmt.Printf("Shutting down\n")
+		log.Info("Shutting down")
 		s.Shutdown(context.Background())
 	}()
 }
@@ -60,18 +64,8 @@ func createServer() (*server.Server, error) {
 	// )
 
 	// Create a new libp2p host
-	h, err := libp2p.New()
-	if err != nil {
-		return nil, err
-	}
-
-	fmt.Printf("libp2p host initialized. host_id=%s\n", h.ID())
 
 	// Starting provider core
-	eng, err := engine.New(engine.WithHost(h), engine.WithPublisherKind(engine.DataTransferPublisher))
-	if err != nil {
-		return nil, err
-	}
 
 	// ---   datastore
 
@@ -90,9 +84,9 @@ func createServer() (*server.Server, error) {
 
 	/// --- server
 
-	s, err := server.New(eng, datastore.NewMapDatastore(), server.WithCidsPerChunk(1))
+	s, err := server.NewServer(datastore.NewMapDatastore(), server.WithCidsPerChunk(1), server.WithDirectAnnounceUrls([]string{"http://127.0.0.1:3001"}))
 	if err != nil {
-		fmt.Printf("Error initialising server %s\n", err)
+		log.Info("Error initialising server %s\n", err)
 		return nil, err
 	}
 
@@ -135,4 +129,21 @@ func checkWritable(dir string) error {
 	}
 	fi.Close()
 	return os.Remove(testfile)
+}
+
+func setLoggingConfig() error {
+	// Set overall log level.
+	err := logging.SetLogLevel("*", "info")
+	if err != nil {
+		return err
+	}
+
+	// Set level for individual loggers.
+	// for loggerName, level := range cfgLogging.Loggers {
+	// 	err = logging.SetLogLevel(loggerName, level)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
+	return nil
 }

@@ -7,20 +7,21 @@ type (
 	Option func(*options) error
 
 	options struct {
-		listenAddr   string
-		readTimeout  time.Duration
-		writeTimeout time.Duration
-		cidsPerChunk int
-		ttl          time.Duration
+		listenAddr         string
+		readTimeout        time.Duration
+		writeTimeout       time.Duration
+		cidsPerChunk       int
+		ttl                time.Duration
+		directAnnounceUrls []string
 	}
 )
 
 func newOptions(o ...Option) (*options, error) {
 	opts := &options{
-		listenAddr:   "0.0.0.0:3102",
+		listenAddr:   "0.0.0.0:50617",
 		readTimeout:  30 * time.Second,
 		writeTimeout: 30 * time.Second,
-		ttl:          24 * 60 * 60 * 1000,
+		ttl:          24 * time.Hour,
 		cidsPerChunk: 10,
 	}
 
@@ -69,6 +70,13 @@ func WithTtl(ttl time.Duration) Option {
 func WithCidsPerChunk(c int) Option {
 	return func(o *options) error {
 		o.cidsPerChunk = c
+		return nil
+	}
+}
+
+func WithDirectAnnounceUrls(urls []string) Option {
+	return func(o *options) error {
+		o.directAnnounceUrls = urls
 		return nil
 	}
 }

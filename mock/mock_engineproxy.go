@@ -12,6 +12,7 @@ import (
 	metadata "github.com/filecoin-project/index-provider/metadata"
 	gomock "github.com/golang/mock/gomock"
 	cid "github.com/ipfs/go-cid"
+	peer "github.com/libp2p/go-libp2p-core/peer"
 )
 
 // MockEngineProxy is a mock of EngineProxy interface.
@@ -38,33 +39,33 @@ func (m *MockEngineProxy) EXPECT() *MockEngineProxyMockRecorder {
 }
 
 // NotifyPut mocks base method.
-func (m *MockEngineProxy) NotifyPut(ctx context.Context, contextID []byte, md metadata.Metadata) (cid.Cid, error) {
+func (m *MockEngineProxy) NotifyPut(ctx context.Context, provider *peer.AddrInfo, contextID []byte, md metadata.Metadata) (cid.Cid, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NotifyPut", ctx, contextID, md)
+	ret := m.ctrl.Call(m, "NotifyPut", ctx, provider, contextID, md)
 	ret0, _ := ret[0].(cid.Cid)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // NotifyPut indicates an expected call of NotifyPut.
-func (mr *MockEngineProxyMockRecorder) NotifyPut(ctx, contextID, md interface{}) *gomock.Call {
+func (mr *MockEngineProxyMockRecorder) NotifyPut(ctx, provider, contextID, md interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyPut", reflect.TypeOf((*MockEngineProxy)(nil).NotifyPut), ctx, contextID, md)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyPut", reflect.TypeOf((*MockEngineProxy)(nil).NotifyPut), ctx, provider, contextID, md)
 }
 
 // NotifyRemove mocks base method.
-func (m *MockEngineProxy) NotifyRemove(ctx context.Context, contextID []byte) (cid.Cid, error) {
+func (m *MockEngineProxy) NotifyRemove(ctx context.Context, providerID peer.ID, contextID []byte) (cid.Cid, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NotifyRemove", ctx, contextID)
+	ret := m.ctrl.Call(m, "NotifyRemove", ctx, providerID, contextID)
 	ret0, _ := ret[0].(cid.Cid)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // NotifyRemove indicates an expected call of NotifyRemove.
-func (mr *MockEngineProxyMockRecorder) NotifyRemove(ctx, contextID interface{}) *gomock.Call {
+func (mr *MockEngineProxyMockRecorder) NotifyRemove(ctx, providerID, contextID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyRemove", reflect.TypeOf((*MockEngineProxy)(nil).NotifyRemove), ctx, contextID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyRemove", reflect.TypeOf((*MockEngineProxy)(nil).NotifyRemove), ctx, providerID, contextID)
 }
 
 // RegisterMultihashLister mocks base method.

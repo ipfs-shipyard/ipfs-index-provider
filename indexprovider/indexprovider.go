@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/gob"
 	"errors"
-	"fmt"
 	"math/rand"
 	"sort"
 	"time"
@@ -16,15 +16,18 @@ import (
 	"github.com/filecoin-project/index-provider/metadata"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-datastore"
+	"github.com/libp2p/go-libp2p-core/peer"
 
 	dsq "github.com/ipfs/go-datastore/query"
 	"github.com/ipfs/go-delegated-routing/client"
 	logging "github.com/ipfs/go-log/v2"
 
+	"github.com/multiformats/go-multiaddr"
 	"github.com/multiformats/go-multihash"
 )
 
 var log = logging.Logger("ipfs-index-provider")
+var lastSeenProviderInfo peer.AddrInfo = peer.AddrInfo{}
 var bitswapMetadata = metadata.New(metadata.Bitswap{})
 
 const chunkByContextIdIndexPrefix = "i/ccid/"
@@ -65,10 +68,10 @@ func NewIndexProviderWithNonceGen(ctx context.Context, e EngineProxy, cidExpiryP
 		nonceGen:         nonceGen,
 	}
 
-	e.RegisterMultihashLister(func(ctx context.Context, contextID []byte) (provider.MultihashIterator, error) {
-		chunk := indexProvider.chunkByContextId[string(contextID)]
+	e.RegisterMultihashLister(func(ctx context.Context, p peer.ID, contextID []byte) (provider.MultihashIterator, error) {
+		chunk := indexProvider.chunkByContextId[contextIDToStr(contextID)]
 		if chunk == nil {
-			log.Error("MultihasLister couldn't find chunk for contextID %s", string(contextID))
+			log.Error("MultihasLister couldn't find chunk for contextID %s", contextIDToStr(contextID))
 			return nil, errors.New("MultihasLister couldn't find chunk for contextID")
 		}
 		var mhs []multihash.Multihash
@@ -160,7 +163,7 @@ func (d *DelegatedRoutingIndexProvider) initialiseFromTheDatastore(ctx context.C
 			return err
 		}
 
-		d.chunkByContextId[string(chunk.ContextID)] = chunk
+		d.chunkByContextId[contextIDToStr(chunk.ContextID)] = chunk
 		for k := range chunk.Cids {
 			d.chunkByCid[k] = chunk
 		}
@@ -169,6 +172,7 @@ func (d *DelegatedRoutingIndexProvider) initialiseFromTheDatastore(ctx context.C
 }
 
 func (DelegatedRoutingIndexProvider) GetIPNS(ctx context.Context, id []byte) (<-chan client.GetIPNSAsyncResult, error) {
+	log.Info("Received reframe:getIPNS request")
 	ch := make(chan client.GetIPNSAsyncResult)
 	go func() {
 		// Not implemented
@@ -179,6 +183,7 @@ func (DelegatedRoutingIndexProvider) GetIPNS(ctx context.Context, id []byte) (<-
 }
 
 func (DelegatedRoutingIndexProvider) PutIPNS(ctx context.Context, id []byte, record []byte) (<-chan client.PutIPNSAsyncResult, error) {
+	log.Info("Received reframe:putIPNS request")
 	ch := make(chan client.PutIPNSAsyncResult)
 	go func() {
 		// Not implemented
@@ -189,6 +194,7 @@ func (DelegatedRoutingIndexProvider) PutIPNS(ctx context.Context, id []byte, rec
 }
 
 func (DelegatedRoutingIndexProvider) FindProviders(ctx context.Context, key cid.Cid) (<-chan client.FindProvidersAsyncResult, error) {
+	log.Info("Received reframe:findProviders request")
 	ch := make(chan client.FindProvidersAsyncResult)
 	go func() {
 		// Not implemented
@@ -199,50 +205,65 @@ func (DelegatedRoutingIndexProvider) FindProviders(ctx context.Context, key cid.
 }
 
 func (d *DelegatedRoutingIndexProvider) Provide(ctx context.Context, pr *client.ProvideRequest) (<-chan client.ProvideAsyncResult, error) {
+	log.Info("Received reframe:provide request")
 	ch := make(chan client.ProvideAsyncResult)
 
 	go func() {
-		n := d.nodeByCid[pr.Key]
+		lastSeenProviderInfo.ID = pr.Provider.Peer.ID
+		lastSeenProviderInfo.Addrs = pr.Provider.Peer.Addrs
 		var err error
-		if n == nil {
-			n = &cidNode{timestamp: time.UnixMilli(pr.Timestamp * 1000), c: pr.Key, next: d.firstNode}
-			err = d.ds.Put(ctx, timestampByCidKey(pr.Key), int64ToBytes(n.timestamp.Add(d.cidExpiryPeriod).UnixMilli()))
-			if err == nil {
-				d.nodeByCid[pr.Key] = n
-				d.addFirstNode(n)
-				err = d.addCidToChunk(ctx, pr.Key)
-			} else {
-				log.Error(fmt.Sprintf("Error persisting timestamp for node %s", n.c), err)
-			}
-		} else {
-			n.timestamp = time.UnixMilli(pr.Timestamp * 1000)
-			err = d.ds.Put(ctx, timestampByCidKey(pr.Key), int64ToBytes(n.timestamp.UnixMilli()))
-			if err == nil {
-				// moving the node to the beginning of the linked list
-				if n.prev != nil {
-					n.prev.next = n.next
-				} else {
-					// that was the first node
-					d.firstNode = n.next
-				}
-				if n.next != nil {
-					n.next.prev = n.prev
-				} else {
-					// that was the last node
-					d.lastNode = n.prev
-				}
-				d.addFirstNode(n)
 
-				// if no existing chunk has been found for the cid - adding it to the current one
-				if _, ok := d.chunkByCid[pr.Key]; !ok {
-					err = d.addCidToChunk(ctx, pr.Key)
+		for _, c := range pr.Key {
+			n := d.nodeByCid[c]
+			if n == nil {
+				log.Info("Seeing cid=", c.String(), " for the first time")
+				n = &cidNode{timestamp: time.UnixMilli(pr.Timestamp * 1000), c: c, next: d.firstNode}
+				err = d.ds.Put(ctx, timestampByCidKey(c), int64ToBytes(n.timestamp.Add(d.cidExpiryPeriod).UnixMilli()))
+				if err == nil {
+					d.nodeByCid[c] = n
+					d.addFirstNode(n)
+					err = d.addCidToChunk(ctx, c)
+					if err != nil {
+						break
+					}
+				} else {
+					log.Error("Error persisting timestamp for cid ", n.c.String(), ", err=", err)
+					break
 				}
 			} else {
-				log.Error(fmt.Sprintf("Error persisting timestamp for node %s", n.c), err)
+				n.timestamp = time.UnixMilli(pr.Timestamp * 1000)
+				log.Info("Already saw cid=", c.String(), ", updating timestamp to %s", n.timestamp.String())
+				err = d.ds.Put(ctx, timestampByCidKey(c), int64ToBytes(n.timestamp.UnixMilli()))
+				if err == nil {
+					// moving the node to the beginning of the linked list
+					if n.prev != nil {
+						n.prev.next = n.next
+					} else {
+						// that was the first node
+						d.firstNode = n.next
+					}
+					if n.next != nil {
+						n.next.prev = n.prev
+					} else {
+						// that was the last node
+						d.lastNode = n.prev
+					}
+					d.addFirstNode(n)
+
+					// if no existing chunk has been found for the cid - adding it to the current one
+					if _, ok := d.chunkByCid[c]; !ok {
+						err = d.addCidToChunk(ctx, c)
+						if err != nil {
+							break
+						}
+					}
+				} else {
+					log.Error("Error persisting timestamp for cid=", n.c.String(), ", err=", err)
+					break
+				}
 			}
+			d.removeExpiredCids(ctx)
 		}
-		d.removeExpiredCids(ctx)
-
 		ch <- client.ProvideAsyncResult{AdvisoryTTL: time.Duration(d.cidExpiryPeriod), Err: err}
 		close(ch)
 	}()
@@ -297,8 +318,9 @@ func (d *DelegatedRoutingIndexProvider) removeExpiredCids(ctx context.Context) e
 
 		chunk := d.chunkByCid[removedNode.c]
 		if chunk != nil {
-			chunksToRepublish[string(chunk.ContextID)] = chunk
+			chunksToRepublish[contextIDToStr(chunk.ContextID)] = chunk
 			expiredCids[removedNode.c] = true
+			log.Info("cid=", removedNode.c.String(), ", timestamp=", removedNode.timestamp.String(), "chunk=", contextIDToStr(chunk.ContextID), " has expired")
 		}
 
 		node = d.lastNode
@@ -323,8 +345,9 @@ func (d *DelegatedRoutingIndexProvider) removeExpiredCids(ctx context.Context) e
 		}
 		// only generating a new chunk if it has some cids left in it
 		if len(newChunk.Cids) > 0 {
-			d.chunkByContextId[string(newChunk.ContextID)] = newChunk
+			d.chunkByContextId[contextIDToStr(newChunk.ContextID)] = newChunk
 			newChunk.ContextID = generateContextID(newChunk.Cids, d.nonceGen())
+			newChunk.Provider = chunk.Provider
 			err = d.notifyPutAndPersist(ctx, newChunk)
 			if err != nil {
 				return err
@@ -334,7 +357,7 @@ func (d *DelegatedRoutingIndexProvider) removeExpiredCids(ctx context.Context) e
 		for _, c := range cidsToCleanUp {
 			err = d.ds.Delete(ctx, timestampByCidKey(c))
 			if err != nil {
-				log.Error("Error cleaning up timestamp by cid index. Continuing.", err)
+				log.Error("Error cleaning up timestamp by cid index. Continuing. err=", err)
 			}
 		}
 	}
@@ -347,13 +370,13 @@ func (d *DelegatedRoutingIndexProvider) persistChunk(ctx context.Context, chunk 
 	e := gob.NewEncoder(&b)
 	err := e.Encode(chunk)
 	if err != nil {
-		log.Error(fmt.Sprintf("Error serializing the chunk %s", string(chunk.ContextID)), err)
+		log.Error("Error serializing the chunk=", contextIDToStr(chunk.ContextID), ", err=", err)
 		return err
 	}
 
 	err = d.ds.Put(ctx, chunkByContextIDKey(chunk.ContextID), b.Bytes())
 	if err != nil {
-		log.Error(fmt.Sprintf("Error persisting the chunk %s", string(chunk.ContextID)), err)
+		log.Error("Error persisting the chunk=", contextIDToStr(chunk.ContextID), ", err=", err)
 		return err
 	}
 
@@ -361,9 +384,10 @@ func (d *DelegatedRoutingIndexProvider) persistChunk(ctx context.Context, chunk 
 }
 
 func (d *DelegatedRoutingIndexProvider) notifyRemoveAndPersist(ctx context.Context, chunk *cidsChunk) error {
-	_, err := d.e.NotifyRemove(ctx, chunk.ContextID)
+	log.Info("Notifying Remove for chunk ", contextIDToStr(chunk.ContextID))
+	_, err := d.e.NotifyRemove(ctx, chunk.Provider, chunk.ContextID)
 	if err != nil {
-		log.Error(fmt.Sprintf("Error invoking NotifyRemove for the chunk %s", string(chunk.ContextID)), err)
+		log.Error("Error invoking NotifyRemove for the chunk=", contextIDToStr(chunk.ContextID), ", err=", err)
 		return err
 	}
 	err = d.persistChunk(ctx, chunk)
@@ -374,9 +398,15 @@ func (d *DelegatedRoutingIndexProvider) notifyRemoveAndPersist(ctx context.Conte
 }
 
 func (d *DelegatedRoutingIndexProvider) notifyPutAndPersist(ctx context.Context, chunk *cidsChunk) error {
-	_, err := d.e.NotifyPut(ctx, chunk.ContextID, bitswapMetadata)
+	log.Info("Notifying Put for chunk=", contextIDToStr(chunk.ContextID))
+	addrs, err := stringsToAddrs(chunk.Addrs)
 	if err != nil {
-		log.Error(fmt.Sprintf("Error invoking NotifyPut for the chunk %s", string(chunk.ContextID)), err)
+		log.Error("Error while parsing multiaddresses from chunk.", err)
+		return err
+	}
+	_, err = d.e.NotifyPut(ctx, &peer.AddrInfo{ID: chunk.Provider, Addrs: addrs}, chunk.ContextID, bitswapMetadata)
+	if err != nil {
+		log.Error("Error invoking NotifyPut for the chunk=", contextIDToStr(chunk.ContextID), ", err=", err)
 		return err
 	}
 	err = d.persistChunk(ctx, chunk)
@@ -394,9 +424,15 @@ type cidNode struct {
 	next      *cidNode
 }
 type cidsChunk struct {
+	Provider  peer.ID
+	Addrs     []string
 	Removed   bool
 	ContextID []byte
 	Cids      map[cid.Cid]bool
+}
+
+func contextIDToStr(contextID []byte) string {
+	return base64.StdEncoding.EncodeToString(contextID)
 }
 
 func (d *DelegatedRoutingIndexProvider) addCidToChunk(ctx context.Context, c cid.Cid) error {
@@ -404,7 +440,9 @@ func (d *DelegatedRoutingIndexProvider) addCidToChunk(ctx context.Context, c cid
 
 	if len(d.currentChunk.Cids) == d.chunkSize {
 		d.currentChunk.ContextID = generateContextID(d.currentChunk.Cids, d.nonceGen())
-		d.chunkByContextId[string(d.currentChunk.ContextID)] = d.currentChunk
+		d.currentChunk.Provider = lastSeenProviderInfo.ID
+		d.currentChunk.Addrs = addrsToStrings(lastSeenProviderInfo.Addrs)
+		d.chunkByContextId[contextIDToStr(d.currentChunk.ContextID)] = d.currentChunk
 		for c := range d.currentChunk.Cids {
 			d.chunkByCid[c] = d.currentChunk
 		}
@@ -438,7 +476,7 @@ func generateContextID(cidsMap map[cid.Cid]bool, nonce []byte) []byte {
 }
 
 func chunkByContextIDKey(contextID []byte) datastore.Key {
-	return datastore.NewKey(chunkByContextIdIndexPrefix + string(contextID))
+	return datastore.NewKey(chunkByContextIdIndexPrefix + contextIDToStr(contextID))
 }
 
 func timestampByCidKey(c cid.Cid) datastore.Key {
@@ -453,4 +491,24 @@ func int64ToBytes(i int64) []byte {
 
 func bytesToInt64(b []byte) int64 {
 	return int64(binary.LittleEndian.Uint64(b))
+}
+
+func addrsToStrings(addrs []multiaddr.Multiaddr) []string {
+	s := make([]string, len(addrs))
+	for i, a := range addrs {
+		s[i] = a.String()
+	}
+	return s
+}
+
+func stringsToAddrs(strs []string) ([]multiaddr.Multiaddr, error) {
+	addrs := make([]multiaddr.Multiaddr, len(strs))
+	for i, s := range strs {
+		a, err := multiaddr.NewMultiaddr(s)
+		if err != nil {
+			return nil, err
+		}
+		addrs[i] = a
+	}
+	return addrs, nil
 }

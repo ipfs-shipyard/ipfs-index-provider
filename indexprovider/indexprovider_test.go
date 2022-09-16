@@ -22,8 +22,10 @@ import (
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/peer"
-	multiaddr "github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multicodec"
 	"github.com/multiformats/go-multihash"
+	"github.com/stretchr/testify/require"
 )
 
 var defaultMetadata metadata.Metadata = metadata.New(metadata.Bitswap{})
@@ -32,20 +34,20 @@ func testNonceGen() []byte {
 	return []byte{1, 2, 3, 4, 5}
 }
 
+func newProvider(t *testing.T, pID peer.ID) *client.Provider {
+	ma, err := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/5001")
+	require.NoError(t, err)
+
+	return &client.Provider{
+		Peer: peer.AddrInfo{
+			ID:    pID,
+			Addrs: []multiaddr.Multiaddr{ma},
+		},
+		ProviderProto: []client.TransferProtocol{{Codec: multicodec.TransportBitswap}},
+	}
+}
+
 func TestProvideRoundtrip(t *testing.T) {
-
-	/**
-	  err := checkWritable(datastoreDir)
-	  	if err != nil {
-	  		return nil, err
-	  	}
-	  	ds, err := leveldb.NewDatastore(datastoreDir, nil)
-	  	if err != nil {
-	  		return nil, err
-	  	}
-
-	*/
-
 	h, err := libp2p.New()
 	if err != nil {
 		panic(err)
@@ -56,8 +58,9 @@ func TestProvideRoundtrip(t *testing.T) {
 		panic(err)
 	}
 
-	ttl := 24 * time.Hour
-	ip, err := ipfsip.NewIndexProvider(context.Background(), e, ttl, 10, datastore.NewMapDatastore())
+	priv, pID := generateKeyAndIdentity(t)
+
+	ip, err := ipfsip.NewIndexProvider(context.Background(), e, 24*time.Hour, 10, datastore.NewMapDatastore())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,18 +70,11 @@ func TestProvideRoundtrip(t *testing.T) {
 
 	testCid := newCid("test")
 
-	if _, err = c1.Provide(context.Background(), testCid, time.Hour); err == nil {
+	if _, err = c1.Provide(context.Background(), []cid.Cid{testCid}, time.Hour); err == nil {
 		t.Fatal("should get sync error on unsigned provide request.")
 	}
 
-	priv, pID := generateKeyAndIdentity(t)
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, newProvider(t, pID), priv)
 	defer s.Close()
 
 	rc := provide(t, c, context.Background(), testCid)
@@ -94,27 +90,19 @@ func TestShouldAdvertiseTwoChunksWithOneCidInEach(t *testing.T) {
 	ctx := context.Background()
 	testCid1 := newCid("test1")
 	testCid2 := newCid("test2")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 
-	ttl := 24 * time.Hour
-	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 1, datastore.NewMapDatastore(), testNonceGen)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, 24*time.Hour, 1, datastore.NewMapDatastore(), testNonceGen)
+	require.NoError(t, err)
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -128,12 +116,13 @@ func TestShouldAdvertiseOneChunkWithTwoCidsInIt(t *testing.T) {
 	testCid1 := newCid("test1")
 	testCid2 := newCid("test2")
 	testCid3 := newCid("test3")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 
 	ttl := 24 * time.Hour
 	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 2, datastore.NewMapDatastore(), testNonceGen)
@@ -141,13 +130,7 @@ func TestShouldAdvertiseOneChunkWithTwoCidsInIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -160,12 +143,13 @@ func TestShouldNotReAdvertiseRepeatedCids(t *testing.T) {
 
 	ctx := context.Background()
 	testCid := newCid("test")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 
 	ttl := 24 * time.Hour
 	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 1, datastore.NewMapDatastore(), testNonceGen)
@@ -173,13 +157,7 @@ func TestShouldNotReAdvertiseRepeatedCids(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid)
@@ -192,15 +170,16 @@ func TestExpiredCidsShouldBeReadvertisedIfProvidedAgain(t *testing.T) {
 	ctx := context.Background()
 	testCid1 := newCid("test1")
 	testCid2 := newCid("test2")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 
 	ttl := time.Second
 	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 1, datastore.NewMapDatastore(), testNonceGen)
@@ -208,13 +187,7 @@ func TestExpiredCidsShouldBeReadvertisedIfProvidedAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -230,14 +203,15 @@ func TestShouldRemoveExpiredCidAndReadvertiseChunk(t *testing.T) {
 	testCid1 := newCid("test1")
 	testCid2 := newCid("test2")
 	testCid3 := newCid("test3")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 
 	ttl := 3 * time.Second
 	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 2, datastore.NewMapDatastore(), testNonceGen)
@@ -245,13 +219,7 @@ func TestShouldRemoveExpiredCidAndReadvertiseChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -268,16 +236,17 @@ func TestShouldRemoveCidsAsTheyExpire(t *testing.T) {
 	testCid1 := newCid("test1")
 	testCid2 := newCid("test2")
 	testCid3 := newCid("test3")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())))
 
 	ttl := 1 * time.Second
 	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 1, datastore.NewMapDatastore(), testNonceGen)
@@ -285,13 +254,7 @@ func TestShouldRemoveCidsAsTheyExpire(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -308,16 +271,17 @@ func TestRepublishingCidShouldUpdateItsExpiryDate(t *testing.T) {
 	testCid1 := newCid("test1")
 	testCid2 := newCid("test2")
 	testCid3 := newCid("test3")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
 
 	ttl := 1 * time.Second
 	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 1, datastore.NewMapDatastore(), testNonceGen)
@@ -325,13 +289,7 @@ func TestRepublishingCidShouldUpdateItsExpiryDate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -346,14 +304,15 @@ func TestShouldNotReadvertiseChunkIfAllItsCidsExpired(t *testing.T) {
 	ctx := context.Background()
 	testCid1 := newCid("test1")
 	testCid2 := newCid("test2")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid1.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 
 	ttl := 1 * time.Second
 	ip, err := ipfsip.NewIndexProviderWithNonceGen(context.Background(), mockEng, ttl, 1, datastore.NewMapDatastore(), testNonceGen)
@@ -361,13 +320,7 @@ func TestShouldNotReadvertiseChunkIfAllItsCidsExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -392,13 +345,7 @@ func TestProvidingSameCidMultipleTimesShouldntAffectTheCurrentChunk(t *testing.T
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip, newProvider(t, pID), priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -415,17 +362,18 @@ func TestShouldInitialiseFromDatastore(t *testing.T) {
 	testCid2 := newCid("test2")
 	testCid3 := newCid("test3")
 	testCid4 := newCid("test4")
+	prov := newProvider(t, pID)
 
 	mc := gomock.NewController(t)
 	mockEng := mock_engine.NewMockEngineProxy(mc)
 
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String(), testCid4.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String(), testCid4.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
 	mockEng.EXPECT().RegisterMultihashLister(gomock.Any())
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid3.String(), testCid4.String()}, testNonceGen())))
-	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Eq(generateContextID([]string{testCid4.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
-	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid3.String(), testCid4.String()}, testNonceGen())))
+	mockEng.EXPECT().NotifyPut(gomock.Any(), gomock.Any(), gomock.Eq(generateContextID([]string{testCid4.String()}, testNonceGen())), gomock.Eq(defaultMetadata))
+	mockEng.EXPECT().NotifyRemove(gomock.Any(), gomock.Eq(pID), gomock.Eq(generateContextID([]string{testCid1.String(), testCid2.String()}, testNonceGen())))
 
 	ttl := time.Second
 	ds := datastore.NewMapDatastore()
@@ -434,13 +382,7 @@ func TestShouldInitialiseFromDatastore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, s := createClientAndServer(t, ip1, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s := createClientAndServer(t, ip1, prov, priv)
 	defer s.Close()
 
 	provide(t, c, ctx, testCid1)
@@ -454,13 +396,7 @@ func TestShouldInitialiseFromDatastore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, s = createClientAndServer(t, ip2, &client.Provider{
-		Peer: peer.AddrInfo{
-			ID:    pID,
-			Addrs: []multiaddr.Multiaddr{},
-		},
-		ProviderProto: []client.TransferProtocol{},
-	}, priv)
+	c, s = createClientAndServer(t, ip2, prov, priv)
 	defer s.Close()
 
 	time.Sleep(2 * time.Second)
@@ -468,7 +404,7 @@ func TestShouldInitialiseFromDatastore(t *testing.T) {
 }
 
 func provide(t *testing.T, cc *client.Client, ctx context.Context, c cid.Cid) time.Duration {
-	rc, err := cc.Provide(ctx, c, 2*time.Hour)
+	rc, err := cc.Provide(ctx, []cid.Cid{c}, 2*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

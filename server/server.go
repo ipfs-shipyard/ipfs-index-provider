@@ -5,10 +5,12 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/filecoin-project/index-provider/engine"
 	"github.com/ipfs-shipyard/ipfs-index-provider/indexprovider"
 	"github.com/ipfs/go-datastore"
 	drserver "github.com/ipfs/go-delegated-routing/server"
 	logging "github.com/ipfs/go-log/v2"
+	"github.com/libp2p/go-libp2p"
 )
 
 var log = logging.Logger("server")
@@ -19,7 +21,7 @@ type Server struct {
 	e      indexprovider.EngineProxy
 }
 
-func New(e indexprovider.EngineProxy, ds datastore.Datastore, o ...Option) (*Server, error) {
+func NewServer(ds datastore.Datastore, o ...Option) (*Server, error) {
 	opts, err := newOptions(o...)
 	if err != nil {
 		return nil, err
@@ -30,7 +32,19 @@ func New(e indexprovider.EngineProxy, ds datastore.Datastore, o ...Option) (*Ser
 		return nil, err
 	}
 
-	ip, err := indexprovider.NewIndexProvider(context.Background(), e, opts.ttl, opts.cidsPerChunk, ds)
+	h, err := libp2p.New()
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info("libp2p host initialized. host_id=", h.ID())
+
+	eng, err := engine.New(engine.WithHost(h), engine.WithPublisherKind(engine.HttpPublisher), engine.WithDirectAnnounce(opts.directAnnounceUrls...))
+	if err != nil {
+		return nil, err
+	}
+
+	ip, err := indexprovider.NewIndexProvider(context.Background(), eng, opts.ttl, opts.cidsPerChunk, ds)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +56,7 @@ func New(e indexprovider.EngineProxy, ds datastore.Datastore, o ...Option) (*Ser
 		ReadTimeout:  opts.readTimeout,
 		WriteTimeout: opts.writeTimeout,
 	}
-	s := &Server{server, l, e}
+	s := &Server{server, l, eng}
 	if err != nil {
 		return nil, err
 	}
